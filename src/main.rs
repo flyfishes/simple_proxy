@@ -10,7 +10,7 @@ use std::fs::File;
 fn main() -> io::Result<()> {
     // 获取端口配置
     let port = get_port();
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", port);
     let log_file = File::create("simple_proxy.log").expect("无法创建日志文件");
     Builder::new()
         .target(env_logger::Target::Pipe(Box::new(log_file)))
