@@ -577,6 +577,6 @@ fn parse_url(url: &str) -> (String, u16, String) {
         host = "localhost".to_string();
     }
 
-    info!("解析目标url: {} {}:{} {}", url, host, port, path.to_string());
+    info!("解析目标url: {} {}:{} {}", url, host, port, path_part.to_string());
     (host, port, path_part.to_string())
 }
