@@ -247,8 +247,6 @@ fn handle_tls_proxy(
 }
 
 // ==================== TLS HTTP 代理处理 ====================
-// ==================== TLS HTTP 代理处理（全面修复版） ====================
-
 #[cfg(feature = "tls")]
 fn handle_tls_http_proxy(
     mut stream: TlsStream<TcpStream>,
@@ -263,8 +261,11 @@ fn handle_tls_http_proxy(
     }
 
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let mut lines = request.lines();
     
+    // 🌟 【调试关键点】强制打印解密后的原始报文，检查 Host 到底长什么样
+    debug!("[连接 #{}] TLS 解密后的原始请求报文:\n---BEGIN---\n{}\n---END---", connection_id, request);
+
+    let mut lines = request.lines();
     let first_line = lines.next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     
@@ -277,59 +278,65 @@ fn handle_tls_http_proxy(
     let original_url = parts[1];
     let version = parts[2];
 
-    // 1. 提取真实的 Host 请求头（无论如何都以此为高优先级准则）
+    // 🌟 加固的 Host 提取逻辑：重新获取 lines 迭代器，避免迭代器状态冲突
     let mut host_header = None;
-    for line in lines {
+    for line in request.lines().skip(1) {
         if line.is_empty() { break; } // 请求头结束
-        if line.to_lowercase().starts_with("host:") {
-            if let Some(h) = line.split(':').nth(1) {
+        
+        let trimmed_line = line.trim();
+        if trimmed_line.to_lowercase().starts_with("host:") {
+            // 切割 "Host:" 或 "host:" 之后的部分
+            if let Some(h) = trimmed_line.get(5..) {
                 host_header = Some(h.trim().to_string());
             }
             break;
         }
     }
 
-    // 2. 智能重构真实的 URL
+    // 智能重构 URL
     let mut url = original_url.to_string();
-    if let Some(host) = host_header {
+    if let Some(ref host) = host_header {
         if original_url.starts_with('/') {
-            // 情况 A: 标准相对路径，如 /index.html
+            // 情况 A: 标准相对路径 /index.html
             url = format!("https://{}{}", host, original_url);
         } else if original_url.starts_with("http://") || original_url.starts_with("https://") {
-            // 情况 B: 畸形绝对路径（如 https://127.0.0.1/），强制将其 host 部分清洗替换为真实的 Host 头
+            // 情况 B: 针对 curl 发送的带错误代理IP的绝对路径 (https://127.0.0.1/)
+            // 提取域名后面的路径部分
             let remainder = if original_url.starts_with("https://") {
                 &original_url[8..]
             } else {
                 &original_url[7..]
             };
-            // 剥离出路径部分（如 / ）
+            
             let path_part = if let Some(slash_pos) = remainder.find('/') {
                 &remainder[slash_pos..]
             } else {
                 "/"
             };
-            // 强制用真实的 Host 头重组 URL
+            // 强制将 Host 替换为请求头里的真实目标域名
             url = format!("https://{}{}", host, path_part);
         }
-    } else if original_url.starts_with('/') {
-        // 兜底：既是相对路径又没给 Host 头
-        warn!("[连接 #{}] TLS 请求未找到 Host 头部，且为相对路径", connection_id);
-        let response = "HTTP/1.1 400 Bad Request\r\n\r\n";
-        let _ = stream.write(response.as_bytes());
-        return Ok(());
+    } else {
+        // 如果实在是找不到 Host 请求头，但 original_url 里面包含了非 127.0.0.1 的域名，交由原本的 url 处理
+        // 如果 original_url 是 127.0.0.1 且没有 Host 头，才报 400
+        if original_url.starts_with('/') || original_url.contains("127.0.0.1") {
+            warn!("[连接 #{}] TLS 请求中未找到有效的 Host 头部，且无法推导目标", connection_id);
+            let response = "HTTP/1.1 400 Bad Request\r\n\r\n";
+            let _ = stream.write(response.as_bytes());
+            return Ok(());
+        }
     }
 
-    // 此时打印出来的 url 将会是正确的 https://www.abcd.com/
-    info!("[连接 #{}] from {} {} {} {}", connection_id, client_addr, method, url, version);
+    info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
 
     if method == "CONNECT" {
         warn!("[连接 #{}] CONNECT 方法在 TLS 代理中不常见", connection_id);
         return Ok(());
     }
 
-    // 转发请求
     handle_tls_http_request(stream, method, &url, version, &buffer[..bytes_read], connection_id)
 }
+
 
 // ==================== TLS HTTP 请求处理 ====================
 
