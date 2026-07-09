@@ -18,12 +18,11 @@ use std::io::BufReader;
 
 fn main() -> io::Result<()> {
     // 初始化日志
-    init_logging();
-
     // 解析命令行参数
-    let (ip, port) = parse_args();
-    let bind_addr = format!("{}:{}", ip, port);
+    let (ip, port, log_level) = parse_args();
+    init_logging(log_level);
     
+    let bind_addr = format!("{}:{}", ip, port);
     let listener = TcpListener::bind(&bind_addr)?;
     
     info!("代理服务器运行在 {}", bind_addr);
@@ -96,10 +95,12 @@ fn init_logging() {
 }
 
 // 解析命令行参数
-fn parse_args() -> (String, u16) {
+// 解析命令行参数，增加日志级别返回值
+fn parse_args() -> (String, u16, log::LevelFilter) {
     let args: Vec<String> = env::args().collect();
     let mut ip = "127.0.0.1".to_string();
     let mut port = 8080;
+    let mut log_level = log::LevelFilter::Info; // 默认是 Info 模式
     
     let mut i = 1;
     while i < args.len() {
@@ -115,6 +116,11 @@ fn parse_args() -> (String, u16) {
                     eprintln!("警告: 无效的端口号 {}，使用默认端口 8080", args[i + 1]);
                 }
                 i += 2;
+            }
+            // 🌟 新增：检测 --debug 或 -d 参数
+            "--debug" | "-d" => {
+                log_level = log::LevelFilter::Debug;
+                i += 1;
             }
             arg => {
                 if let Ok(p) = arg.parse::<u16>() {
@@ -133,7 +139,7 @@ fn parse_args() -> (String, u16) {
         ip = "127.0.0.1".to_string();
     }
     
-    (ip, port)
+    (ip, port, log_level)
 }
 
 // 处理连接 - 协议检测
@@ -256,7 +262,9 @@ fn handle_tls_http_proxy(
     }
 
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    let first_line = request.lines().next().unwrap_or("");
+    let mut lines = request.lines();
+    
+    let first_line = lines.next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     
     if parts.len() < 3 {
@@ -265,17 +273,44 @@ fn handle_tls_http_proxy(
     }
 
     let method = parts[0];
-    let url = parts[1];
+    let mut url = parts[1].to_string(); // 修改为可变 String
     let version = parts[2];
 
-    debug!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
+    //  核心修复点：如果解密后的 URL 是相对路径（如 /index.html），从 Host 请求头中补全
+    if url.starts_with('/') {
+        let mut host_header = None;
+        // 遍历接下来的每一行，寻找 Host 头部
+        for line in lines {
+            if line.is_empty() { break; } // 请求头结束
+            if line.to_lowercase().starts_with("host:") {
+                if let Some(h) = line.split(':').nth(1) {
+                    host_header = Some(h.trim().to_string());
+                }
+                break;
+            }
+        }
+
+        if let Some(host) = host_header {
+            // 将 Host 域名与相对路径拼接，还原为 parse_url 能够正确识别的格式
+            // 既然走到了 TLS 代理内部，默认目标协议是 https://
+            url = format!("https://{}{}", host, url);
+        } else {
+            warn!("[连接 #{}] TLS 请求未找到 Host 头部，无法解析目标", connection_id);
+            let response = "HTTP/1.1 400 Bad Request\r\n\r\n";
+            let _ = stream.write(response.as_bytes());
+            return Ok(());
+        }
+    }
+
+    info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
 
     if method == "CONNECT" {
         warn!("[连接 #{}] CONNECT 方法在 TLS 代理中不常见", connection_id);
         return Ok(());
     }
 
-    handle_tls_http_request(stream, method, url, version, &buffer[..bytes_read], connection_id)
+    // 转发请求，此时的 url 已经是包含了域名的完整 URL
+    handle_tls_http_request(stream, method, &url, version, &buffer[..bytes_read], connection_id)
 }
 
 // ==================== TLS HTTP 请求处理 ====================
