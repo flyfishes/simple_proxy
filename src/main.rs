@@ -58,7 +58,7 @@ fn main() -> io::Result<()> {
                     
                     match result {
                         Ok(_) => {
-                            info!("[连接 #{}] 客户端 {} 处理完成，耗时: {:?}", 
+                            debug!("[连接 #{}] 客户端 {} 处理完成，耗时: {:?}", 
                                   current_id, client_addr, duration);
                         }
                         Err(e) => {
@@ -81,12 +81,12 @@ fn init_logging() {
     #[cfg(feature = "logging")]
     {
         use env_logger::Builder;
-        let log_file = std::fs::File::create("proxy.log").expect("无法创建日志文件");
+        let log_file = std::fs::File::create("simple_proxy.log").expect("无法创建日志文件");
         Builder::new()
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .filter(None, log::LevelFilter::Info)
             .init();
-        info!("日志文件: proxy.log");
+        info!("日志文件: simple_proxy.log");
     }
     
     #[cfg(not(feature = "logging"))]
@@ -153,11 +153,11 @@ fn handle_connection(
             #[cfg(feature = "tls")]
             {
                 if peek_buf[0] == 0x16 && tls_acceptor.is_some() {
-                    info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
+                    debug!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
                     return handle_tls_proxy(stream, connection_id, client_addr, tls_acceptor.unwrap());
                 }
             }
-            info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
+            debug!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
             handle_http_proxy(stream, connection_id, client_addr)
         }
         Err(e) => {
@@ -194,10 +194,10 @@ fn handle_http_proxy(
     let url = parts[1];
     let version = parts[2];
 
-    info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
+    debug!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
 
     if method == "CONNECT" {
-        info!("[连接 #{}] 处理 HTTPS CONNECT 请求: {}", connection_id, url);
+        debug!("[连接 #{}] 处理 HTTPS CONNECT 请求: {}", connection_id, url);
         return handle_connect(stream, url, connection_id, client_addr);
     }
 
@@ -213,11 +213,11 @@ fn handle_tls_proxy(
     client_addr: SocketAddr,
     acceptor: Arc<TlsAcceptor>,
 ) -> io::Result<()> {
-    info!("[连接 #{}] 开始 TLS 握手", connection_id);
+    debug!("[连接 #{}] 开始 TLS 握手", connection_id);
     
     let tls_stream = match acceptor.accept(stream) {
         Ok(s) => {
-            info!("[连接 #{}] TLS 握手成功", connection_id);
+            debug!("[连接 #{}] TLS 握手成功", connection_id);
             s
         }
         Err(e) => {
@@ -268,7 +268,7 @@ fn handle_tls_http_proxy(
     let url = parts[1];
     let version = parts[2];
 
-    info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
+    debug!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
 
     if method == "CONNECT" {
         warn!("[连接 #{}] CONNECT 方法在 TLS 代理中不常见", connection_id);
@@ -290,7 +290,7 @@ fn handle_tls_http_request(
     connection_id: usize,
 ) -> io::Result<()> {
     let (host, port, path) = parse_url(url);
-    info!("[连接 #{}] 解析目标: {}:{}{}", connection_id, host, port, path);
+    debug!("[连接 #{}] 解析目标tls: {}:{}{}", connection_id, host, port, path);
 
     let request_line = format!("{} {} {}\r\n", method, path, version);
     let request_str = String::from_utf8_lossy(request_data);
@@ -304,7 +304,7 @@ fn handle_tls_http_request(
     let target_addr = format!("{}:{}", host, port);
     let mut target_stream = match TcpStream::connect(&target_addr) {
         Ok(stream) => {
-            info!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
+            debug!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
             stream
         }
         Err(e) => {
@@ -346,7 +346,7 @@ fn handle_tls_http_request(
         }
     }
 
-    info!("[连接 #{}] 响应转发完成 ({} 字节)", connection_id, total_bytes);
+    debug!("[连接 #{}] 响应转发完成 ({} 字节)", connection_id, total_bytes);
     Ok(())
 }
 
@@ -395,7 +395,7 @@ fn handle_connect(
 
     let mut target_stream = match TcpStream::connect(&target_addr) {
         Ok(stream) => {
-            info!("[连接 #{}] 成功连接到目标服务器: {}", connection_id, target_addr);
+            debug!("[连接 #{}] 成功连接到目标服务器: {}", connection_id, target_addr);
             stream
         }
         Err(e) => {
@@ -407,7 +407,7 @@ fn handle_connect(
     };
 
     client_stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
-    info!("[连接 #{}] 隧道已建立 ({} -> {})", connection_id, client_addr, target_addr);
+    debug!("[连接 #{}] 隧道已建立 ({} -> {})", connection_id, client_addr, target_addr);
 
     // 深度修复点 2: 解决双向转发下的线程死锁与半关闭泄露问题
     let mut client_clone = client_stream.try_clone()?;
@@ -447,7 +447,7 @@ fn handle_connect(
     let _ = client_stream.shutdown(std::net::Shutdown::Both);
     let _ = handle1.join();
 
-    //info!("[连接 #{}] 隧道已关闭", connection_id);
+    debug!("[连接 #{}] 隧道已关闭", connection_id);
     Ok(())
 }
 
@@ -462,7 +462,7 @@ fn handle_http_request(
     connection_id: usize,
 ) -> io::Result<()> {
     let (host, port, path) = parse_url(url);
-    //info!("[连接 #{}] 解析目标: {}:{}{}", connection_id, host, port, path);
+    debug!("[连接 #{}] 解析目标HTTP: {}:{}{}", connection_id, host, port, path);
 
     let request_line = format!("{} {} {}\r\n", method, path, version);
     let request_str = String::from_utf8_lossy(request_data);
@@ -476,7 +476,7 @@ fn handle_http_request(
     let target_addr = format!("{}:{}", host, port);
     let mut target_stream = match TcpStream::connect(&target_addr) {
         Ok(stream) => {
-            info!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
+            debug!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
             stream
         }
         Err(e) => {
@@ -518,57 +518,49 @@ fn handle_http_request(
         }
     }
 
-    //info!("[连接 #{}] 响应转发完成 ({} 字节)", connection_id, total_bytes);
+    debug!("[连接 #{}] 响应转发完成 ({} 字节)", connection_id, total_bytes);
     Ok(())
 }
 
 // ==================== URL 解析（修复版 - 支持 https://） ====================
+// ==================== URL 解析 ====================
 
 fn parse_url(url: &str) -> (String, u16, String) {
-    if url.starts_with("http://") || url.starts_with("https://") {
-        let protocol_len = if url.starts_with("https://") { 8 } else { 7 };
-        let url_without_protocol = &url[protocol_len..];
-        
-        if let Some(path_pos) = url_without_protocol.find('/') {
-            let host_part = &url_without_protocol[..path_pos];
-            let path = &url_without_protocol[path_pos..];
-            
-            if let Some(port_pos) = host_part.find(':') {
-                let host = host_part[..port_pos].to_string();
-                let port: u16 = host_part[port_pos + 1..].parse().unwrap_or(80);
-                return (host, port, path.to_string());
-            } else {
-                let default_port = if url.starts_with("https://") { 443 } else { 80 };
-                return (host_part.to_string(), default_port, path.to_string());
-            }
-        } else {
-            let default_port = if url.starts_with("https://") { 443 } else { 80 };
-            return (url_without_protocol.to_string(), default_port, "/".to_string());
-        }
-    }
+    let url = url.trim();
     
-    if url.starts_with('/') {
-        return ("localhost".to_string(), 80, url.to_string());
-    }
+    // 如果没有协议前缀，添加 http://
+    let url_with_protocol = if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("http://{}", url)
+    };
     
-    if let Some(path_pos) = url.find('/') {
-        let host_part = &url[..path_pos];
-        let path = &url[path_pos..];
-        
-        if let Some(port_pos) = host_part.find(':') {
-            let host = host_part[..port_pos].to_string();
-            let port: u16 = host_part[port_pos + 1..].parse().unwrap_or(80);
-            return (host, port, path.to_string());
-        } else {
-            return (host_part.to_string(), 80, path.to_string());
-        }
-    }
+    // 移除协议前缀
+    let rest = if url_with_protocol.starts_with("https://") {
+        &url_with_protocol[8..]
+    } else {
+        // http:// 或默认
+        &url_with_protocol[7..]
+    };
     
-    if let Some(port_pos) = url.find(':') {
-        let host = url[..port_pos].to_string();
-        let port: u16 = url[port_pos + 1..].parse().unwrap_or(80);
-        return (host, port, "/".to_string());
-    }
+    // 分离主机和路径
+    let (host_part, path) = if let Some(pos) = rest.find('/') {
+        (&rest[..pos], &rest[pos..])
+    } else {
+        (rest, "/")
+    };
     
-    (url.to_string(), 80, "/".to_string())
+    // 分离主机和端口
+    let (host, port) = if let Some(pos) = host_part.find(':') {
+        let host = host_part[..pos].to_string();
+        let port_str = &host_part[pos + 1..];
+        let port = port_str.parse::<u16>().unwrap_or(80);
+        (host, port)
+    } else {
+        // 根据协议决定默认端口
+        let default_port = if url_with_protocol.starts_with("https://") { 443 } else { 80 };
+        (host_part.to_string(), default_port)
+    };
+    
+    (host, port, path.to_string())
 }
