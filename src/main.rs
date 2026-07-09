@@ -93,7 +93,6 @@ fn init_logging() {
     
     #[cfg(not(feature = "logging"))]
     {
-        // 不启用日志功能时，使用简单输出
         println!("日志功能未启用，请使用 --features logging 编译");
     }
 }
@@ -142,12 +141,13 @@ fn parse_args() -> (String, u16) {
 
 // 处理连接 - 协议检测
 fn handle_connection(
-    mut stream: TcpStream,
+    stream: TcpStream,
     connection_id: usize,
     client_addr: SocketAddr,
     tls_config: Option<Arc<ServerConfig>>,
 ) -> io::Result<()> {
     let mut peek_buf = [0; 1];
+    // 修复: 使用 &stream 而不是 mut stream
     match stream.peek(&mut peek_buf) {
         Ok(0) => {
             warn!("[连接 #{}] 客户端 {} 连接已关闭", connection_id, client_addr);
@@ -241,8 +241,9 @@ fn handle_tls_proxy(
             }
         };
         
-        // 修复1: 使用 into_inner() 代替 into_std()
-        let io_stream = tls_stream.into_inner();
+        // 修复1: 使用 into_inner() 获取内部连接
+        let (io_stream, _connection) = tls_stream.into_inner();
+        // 修复2: 使用 into_std() 转换 tokio TcpStream 到 std TcpStream
         let std_stream = io_stream.into_std().await
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         
@@ -285,8 +286,9 @@ fn load_tls_config() -> Result<Arc<ServerConfig>, Box<dyn std::error::Error>> {
 fn load_certs(path: &str) -> Result<Vec<Certificate>, Box<dyn std::error::Error>> {
     let certfile = File::open(path)?;
     let mut reader = BufReader::new(certfile);
-    // 修复2: 使用 ? 操作符需要正确的错误类型
-    let cert_reader = certs(&mut reader)?;
+    // 修复3: certs() 返回 Iterator，需要 collect 到 Vec
+    let cert_reader: Vec<_> = certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(cert_reader.into_iter().map(Certificate).collect())
 }
 
@@ -294,8 +296,9 @@ fn load_certs(path: &str) -> Result<Vec<Certificate>, Box<dyn std::error::Error>
 fn load_private_key(path: &str) -> Result<PrivateKey, Box<dyn std::error::Error>> {
     let keyfile = File::open(path)?;
     let mut reader = BufReader::new(keyfile);
-    // 修复3: 使用 ? 操作符需要正确的错误类型
-    let mut keys = pkcs8_private_keys(&mut reader)?;
+    // 修复4: pkcs8_private_keys() 返回 Iterator，需要 collect 到 Vec
+    let mut keys: Vec<_> = pkcs8_private_keys(&mut reader)
+        .collect::<Result<Vec<_>, _>>()?;
     if keys.is_empty() {
         return Err("没有找到私钥".into());
     }
@@ -404,7 +407,7 @@ fn handle_http_request(
     version: &str,
     request_data: &[u8],
     connection_id: usize,
-    client_addr: SocketAddr,
+    _client_addr: SocketAddr,  // 修复: 添加下划线前缀表示未使用
 ) -> io::Result<()> {
     let (host, port, path) = parse_url(url);
     info!("[连接 #{}] 解析目标: {}:{}{}", connection_id, host, port, path);
@@ -450,25 +453,26 @@ fn handle_http_request(
 
     info!("[连接 #{}] 请求转发完成 (Headers: {})", connection_id, headers.len());
 
-    // 修复4: 使用独立的 buffer 来避免借用冲突
-    let mut response_buffer = [0; 8192];
+    // 修复5: 使用两个独立的 buffer 来避免借用冲突
+    let mut buffer = [0; 8192];
     let mut total_bytes = 0;
-    let mut response_status = "unknown";
+    let mut response_status = "unknown".to_string();
     
     loop {
-        match target_stream.read(&mut response_buffer) {
+        match target_stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => {
                 if total_bytes == 0 {
-                    if let Ok(response_str) = std::str::from_utf8(&response_buffer[..n]) {
+                    // 修复6: 使用单独的变量来存储响应状态，避免借用冲突
+                    if let Ok(response_str) = std::str::from_utf8(&buffer[..n]) {
                         if let Some(status_line) = response_str.lines().next() {
-                            response_status = status_line;
+                            response_status = status_line.to_string();
                             info!("[连接 #{}] 响应状态: {}", connection_id, status_line);
                         }
                     }
                 }
                 total_bytes += n;
-                client_stream.write_all(&response_buffer[..n])?;
+                client_stream.write_all(&buffer[..n])?;
             }
             Err(e) => {
                 error!("[连接 #{}] 从目标读取响应错误: {}", connection_id, e);
