@@ -58,7 +58,7 @@ strip = true
 
 [features]
 # 定义特性标志
-default = []
+default = ["logging"]
 # 启用日志功能
 logging = ["log", "env_logger"]
 # 启用配置文件支持
