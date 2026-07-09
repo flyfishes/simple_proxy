@@ -11,27 +11,23 @@ keywords = ["proxy", "http", "https", "server"]
 categories = ["network-programming", "web-programming"]
 
 [dependencies]
-# 1. 日志支持
-log = { version = "0.4", optional = true }
-env_logger = { version = "0.11", optional = true }
+# 核心日志门面：代码中直接 use 了 log，必须作为基础依赖，否则不开启 feature 时会报语法错误
+log = "0.4"
 
-# 2. 配置文件支持 (TOML)
+# 1. 日志实现支持（可选）
+env_logger = { version = "0.10", optional = true }
+
+# 2. 配置文件支持 (TOML) (可选)
 serde = { version = "1.0", features = ["derive"], optional = true }
 toml = { version = "0.8", optional = true }
 
-# 3. TLS 支持
-rustls-pemfile = { version = "2.0", optional = true }
-tokio-rustls = { version = "0.26", optional = true }
-pki-types = { package = "rustls-pki-types", version = "1.0", optional = true }
+# 3. TLS 支持 (可选)
+native-tls = { version = "0.2", optional = true }
 
-# 4. 异步支持 (核心依赖，若服务器核心基于异步，建议不设为 optional)
-tokio = { version = "1.0", features = ["full"] }
-
-# 5. 命令行参数解析
+# 4. 命令行参数解析 (可选)
 clap = { version = "4.0", features = ["derive"], optional = true }
 
 [dev-dependencies]
-# 测试依赖（若需要可在此处解开注释）
 
 [profile.dev]
 opt-level = 0
@@ -48,41 +44,20 @@ codegen-units = 1
 strip = true
 
 [features]
-# 默认启用日志与 TLS
+# 默认启用日志和 TLS
 default = ["logging", "tls"]
 
-# 启用日志功能
-logging = ["log", "env_logger"]
+# 启用日志输出实现
+logging = ["dep:env_logger"]
 
 # 启用配置文件支持
-config = ["serde", "toml"]
+config = ["dep:serde", "dep:toml"]
 
 # 启用命令行参数解析
-cli = ["clap"]
+cli = ["dep:clap"]
 
-# 启用 TLS 支持（使用 dep: 显式激活可选依赖）
-tls = ["dep:tokio-rustls", "dep:rustls-pemfile", "dep:pki-types"]
+# 启用 TLS 支持
+tls = ["dep:native-tls"]
 
-# 完整功能（包含组件）
+# 完整功能
 full = ["logging", "config", "cli", "tls"]
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
-
-[package.metadata.deb]
-section = "net"
-priority = "optional"
-maintainer = "Your Name <your.email@example.com>"
-copyright = "2023, Your Name"
-license = "MIT"
-depends = "libc6"
-assets = [
-    ["target/release/simple_proxy", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/simple_proxy/", "644"],
-]
-
-# 修正：标准的二进制定义配置块
-[[bin]]
-name = "simple_proxy"
-path = "src/main.rs"
