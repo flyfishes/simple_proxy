@@ -359,15 +359,12 @@ fn load_tls_config() -> Result<Arc<TlsAcceptor>, Box<dyn std::error::Error>> {
     
     info!("加载证书: {}, 私钥: {}", cert_path, key_path);
     
-    let cert_file = File::open(cert_path)?;
-    let key_file = File::open(key_path)?;
-    let mut cert_reader = BufReader::new(cert_file);
-    let mut key_reader = BufReader::new(key_file);
+    // 直接将文件读取为 Vec<u8> 字节数组
+    let cert_data = std::fs::read(cert_path)?;
+    let key_data = std::fs::read(key_path)?;
     
-    let identity = Identity::from_pkcs8(
-        &mut cert_reader,
-        &mut key_reader,
-    )?;
+    // 传入 &[u8] 类型的切片
+    let identity = Identity::from_pkcs8(&cert_data, &key_data)?;
     
     let acceptor = TlsAcceptor::new(identity)?;
     Ok(Arc::new(acceptor))
