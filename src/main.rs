@@ -76,14 +76,14 @@ fn main() -> io::Result<()> {
 }
 
 // 初始化日志系统
-fn init_logging() {
+fn init_logging(level: log::LevelFilter) {
     #[cfg(feature = "logging")]
     {
         use env_logger::Builder;
         let log_file = std::fs::File::create("simple_proxy.log").expect("无法创建日志文件");
         Builder::new()
             .target(env_logger::Target::Pipe(Box::new(log_file)))
-            .filter(None, log::LevelFilter::Info)
+            .filter(None, level)
             .init();
         info!("日志文件: simple_proxy.log");
     }
