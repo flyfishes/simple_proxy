@@ -1,6 +1,6 @@
 use std::env;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, SocketAddr, IpAddr, Ipv4Addr};
+use std::net::{TcpListener, TcpStream, SocketAddr};
 use std::thread;
 use std::io;
 use std::time::Instant;
@@ -83,12 +83,12 @@ fn init_logging() {
     #[cfg(feature = "logging")]
     {
         use env_logger::Builder;
-        let log_file = std::fs::File::create("simple_proxy.log").expect("无法创建日志文件");
+        let log_file = std::fs::File::create("proxy.log").expect("无法创建日志文件");
         Builder::new()
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .filter(None, log::LevelFilter::Info)
             .init();
-        info!("日志文件: simple_proxy.log");
+        info!("日志文件: proxy.log");
     }
     
     #[cfg(not(feature = "logging"))]
@@ -120,7 +120,6 @@ fn parse_args() -> (String, u16) {
                 i += 2;
             }
             arg => {
-                // 尝试解析为端口号
                 if let Ok(p) = arg.parse::<u16>() {
                     port = p;
                     i += 1;
@@ -132,8 +131,7 @@ fn parse_args() -> (String, u16) {
         }
     }
     
-    // 验证 IP 地址格式
-    if ip.parse::<IpAddr>().is_err() {
+    if ip.parse::<std::net::IpAddr>().is_err() {
         eprintln!("警告: 无效的 IP 地址 {}，使用 127.0.0.1", ip);
         ip = "127.0.0.1".to_string();
     }
@@ -149,7 +147,6 @@ fn handle_connection(
     client_addr: SocketAddr,
     tls_config: Option<Arc<ServerConfig>>,
 ) -> io::Result<()> {
-    // 尝试读取第一个字节来判断协议
     let mut peek_buf = [0; 1];
     match stream.peek(&mut peek_buf) {
         Ok(0) => {
@@ -157,18 +154,19 @@ fn handle_connection(
             return Ok(());
         }
         Ok(_) => {
-            // 检查是否是 TLS 连接 (TLS 握手第一个字节是 0x16)
-            if peek_buf[0] == 0x16 && tls_config.is_some() {
-                info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
-                return handle_tls_proxy(stream, connection_id, client_addr, tls_config.unwrap());
-            } else {
-                info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
-                return handle_http_proxy(stream, connection_id, client_addr);
+            #[cfg(feature = "tls")]
+            {
+                if peek_buf[0] == 0x16 && tls_config.is_some() {
+                    info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
+                    return handle_tls_proxy(stream, connection_id, client_addr, tls_config.unwrap());
+                }
             }
+            info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
+            handle_http_proxy(stream, connection_id, client_addr)
         }
         Err(e) => {
             error!("[连接 #{}] 无法检测协议: {}", connection_id, e);
-            return Err(e);
+            Err(e)
         }
     }
 }
@@ -189,7 +187,6 @@ fn handle_http_proxy(
 
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
     
-    // 解析请求行
     let first_line = request.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
     
@@ -204,13 +201,11 @@ fn handle_http_proxy(
 
     info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
 
-    // 处理 CONNECT 方法 (HTTPS 隧道)
     if method == "CONNECT" {
         info!("[连接 #{}] 处理 HTTPS CONNECT 请求: {}", connection_id, url);
         return handle_connect(stream, url, connection_id, client_addr);
     }
 
-    // 处理标准 HTTP 请求
     handle_http_request(stream, method, url, version, &buffer[..bytes_read], connection_id, client_addr)
 }
 
@@ -228,7 +223,6 @@ fn handle_tls_proxy(
     
     info!("[连接 #{}] 开始 TLS 握手", connection_id);
     
-    // 创建异步运行时
     let rt = Runtime::new().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
     
     rt.block_on(async {
@@ -236,7 +230,6 @@ fn handle_tls_proxy(
         let stream = tokio::net::TcpStream::from_std(stream)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         
-        // 执行 TLS 握手
         let tls_stream = match acceptor.accept(stream).await {
             Ok(s) => {
                 info!("[连接 #{}] TLS 握手成功", connection_id);
@@ -248,8 +241,9 @@ fn handle_tls_proxy(
             }
         };
         
-        // 将 TLS 流转换回标准流并处理 HTTP 请求
-        let std_stream = tls_stream.into_std().await
+        // 修复1: 使用 into_inner() 代替 into_std()
+        let io_stream = tls_stream.into_inner();
+        let std_stream = io_stream.into_std().await
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         
         handle_http_proxy(std_stream, connection_id, client_addr)
@@ -291,22 +285,21 @@ fn load_tls_config() -> Result<Arc<ServerConfig>, Box<dyn std::error::Error>> {
 fn load_certs(path: &str) -> Result<Vec<Certificate>, Box<dyn std::error::Error>> {
     let certfile = File::open(path)?;
     let mut reader = BufReader::new(certfile);
-    let certs = certs(&mut reader)?
-        .into_iter()
-        .map(Certificate)
-        .collect();
-    Ok(certs)
+    // 修复2: 使用 ? 操作符需要正确的错误类型
+    let cert_reader = certs(&mut reader)?;
+    Ok(cert_reader.into_iter().map(Certificate).collect())
 }
 
 #[cfg(feature = "tls")]
 fn load_private_key(path: &str) -> Result<PrivateKey, Box<dyn std::error::Error>> {
     let keyfile = File::open(path)?;
     let mut reader = BufReader::new(keyfile);
-    let keys = pkcs8_private_keys(&mut reader)?;
+    // 修复3: 使用 ? 操作符需要正确的错误类型
+    let mut keys = pkcs8_private_keys(&mut reader)?;
     if keys.is_empty() {
         return Err("没有找到私钥".into());
     }
-    Ok(PrivateKey(keys[0].clone()))
+    Ok(PrivateKey(keys.remove(0)))
 }
 
 // ==================== CONNECT 方法处理（HTTPS 隧道） ====================
@@ -440,7 +433,6 @@ fn handle_http_request(
         }
     };
 
-    // 发送请求
     target_stream.write(request_line.as_bytes())?;
     for header in &headers {
         target_stream.write(header.as_bytes())?;
@@ -448,7 +440,6 @@ fn handle_http_request(
     }
     target_stream.write(b"\r\n")?;
 
-    // 转发请求体
     if let Some(body_start) = request_str.find("\r\n\r\n") {
         let body = &request_data[body_start + 4..];
         if !body.is_empty() {
@@ -459,17 +450,17 @@ fn handle_http_request(
 
     info!("[连接 #{}] 请求转发完成 (Headers: {})", connection_id, headers.len());
 
-    // 读取并转发响应
-    let mut buffer = [0; 8192];
+    // 修复4: 使用独立的 buffer 来避免借用冲突
+    let mut response_buffer = [0; 8192];
     let mut total_bytes = 0;
     let mut response_status = "unknown";
     
     loop {
-        match target_stream.read(&mut buffer) {
+        match target_stream.read(&mut response_buffer) {
             Ok(0) => break,
             Ok(n) => {
                 if total_bytes == 0 {
-                    if let Ok(response_str) = std::str::from_utf8(&buffer[..n]) {
+                    if let Ok(response_str) = std::str::from_utf8(&response_buffer[..n]) {
                         if let Some(status_line) = response_str.lines().next() {
                             response_status = status_line;
                             info!("[连接 #{}] 响应状态: {}", connection_id, status_line);
@@ -477,7 +468,7 @@ fn handle_http_request(
                     }
                 }
                 total_bytes += n;
-                client_stream.write_all(&buffer[..n])?;
+                client_stream.write_all(&response_buffer[..n])?;
             }
             Err(e) => {
                 error!("[连接 #{}] 从目标读取响应错误: {}", connection_id, e);
@@ -494,7 +485,6 @@ fn handle_http_request(
 // ==================== URL 解析 ====================
 
 fn parse_url(url: &str) -> (String, u16, String) {
-    // 处理完整 URL
     if url.starts_with("http://") {
         let url_without_protocol = &url[7..];
         if let Some(path_pos) = url_without_protocol.find('/') {
@@ -513,12 +503,10 @@ fn parse_url(url: &str) -> (String, u16, String) {
         }
     }
     
-    // 处理相对路径
     if url.starts_with('/') {
         return ("localhost".to_string(), 80, url.to_string());
     }
     
-    // 处理 host:port/path 格式
     if let Some(path_pos) = url.find('/') {
         let host_part = &url[..path_pos];
         let path = &url[path_pos..];
@@ -532,7 +520,6 @@ fn parse_url(url: &str) -> (String, u16, String) {
         }
     }
     
-    // 只有 host:port
     if let Some(port_pos) = url.find(':') {
         let host = url[..port_pos].to_string();
         let port: u16 = url[port_pos + 1..].parse().unwrap_or(80);
