@@ -16,18 +16,18 @@ categories = ["network-programming", "web-programming"]
 # 如果需要更高级的功能，可以添加以下可选依赖：
 
 # 1. 日志支持
- log = "0.4"
- env_logger = "0.10"
+log = { version = "0.4", optional = true }
+env_logger = { version = "0.10", optional = true }
 
 # 2. 配置文件支持 (TOML)
- serde = { version = "1.0", features = ["derive"] }
- toml = "0.8"
+serde = { version = "1.0", features = ["derive"], optional = true }
+toml = { version = "0.8", optional = true }
 
 # 3. 异步支持 (使用tokio)
- tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["full"], optional = true }
 
 # 4. 命令行参数解析
- clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.0", features = ["derive"], optional = true }
 
 # 5. 更好的错误处理
 # anyhow = "1.0"
