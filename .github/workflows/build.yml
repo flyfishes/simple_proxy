@@ -1,0 +1,122 @@
+name: Build and Release Proxy
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    # 允许手动触发
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: simple-proxy
+            asset_name: simple-proxy-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: simple-proxy.exe
+            asset_name: simple-proxy-windows-x86_64.exe
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: simple-proxy
+            asset_name: simple-proxy-linux-aarch64
+            use_cross: true
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+            artifact_name: simple-proxy.exe
+            asset_name: simple-proxy-windows-gnu-x86_64.exe
+            use_cross: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+        override: true
+        profile: minimal
+
+    - name: Install cross-compilation dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build (debug)
+      run: cargo build --target ${{ matrix.target }}
+
+    - name: Build (release)
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Upload release artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+        if-no-files-found: error
+
+    - name: Upload debug artifact (optional)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}-debug
+        path: target/${{ matrix.target }}/debug/${{ matrix.artifact_name }}
+        if-no-files-found: warn
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: List artifacts
+      run: |
+        ls -la artifacts
+        find artifacts -type f -exec ls -la {} \;
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+        files: |
+          artifacts/**/*.exe
+          artifacts/**/simple-proxy-linux-*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
