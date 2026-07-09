@@ -425,48 +425,32 @@ where
 }
 
 // ==================== URL 解析 ====================
-
 fn parse_url(url: &str) -> (String, u16, String) {
-    if url.starts_with("http://") {
-        let url_without_protocol = &url[7..];
-        if let Some(path_pos) = url_without_protocol.find('/') {
-            let host_part = &url_without_protocol[..path_pos];
-            let path = &url_without_protocol[path_pos..];
-            
-            if let Some(port_pos) = host_part.find(':') {
-                let host = host_part[..port_pos].to_string();
-                let port: u16 = host_part[port_pos + 1..].parse().unwrap_or(80);
-                return (host, port, path.to_string());
-            } else {
-                return (host_part.to_string(), 80, path.to_string());
-            }
-        } else {
-            return (url_without_protocol.to_string(), 80, "/".to_string());
-        }
+    let mut remaining = url;
+
+    // 1. 处理协议头 (http:// 或 https://)
+    let mut default_port = 80;
+    if remaining.starts_with("http://") {
+        remaining = &remaining[7..];
+    } else if remaining.starts_with("https://") {
+        remaining = &remaining[8..];
+        default_port = 443; // 如果是 https 协议，默认端口改为 443
     }
-    
-    if url.starts_with('/') {
-        return ("localhost".to_string(), 80, url.to_string());
+
+    // 2. 分离主机/端口部分 与 路径部分
+    let (host_port_part, path) = if let Some(path_pos) = remaining.find('/') {
+        (&remaining[..path_pos], &remaining[path_pos..])
+    } else {
+        (remaining, "/")
+    };
+
+    // 3. 从主机部分分离出具体的 Host 和 Port (如 google.com:443 或 example.com)
+    if let Some(port_pos) = host_port_part.find(':') {
+        let host = host_port_part[..port_pos].to_string();
+        // 尝试解析端口，解析失败则回退到默认端口
+        let port = host_port_part[port_pos + 1..].parse().unwrap_or(default_port);
+        (host, port, path.to_string())
+    } else {
+        (host_port_part.to_string(), default_port, path.to_string())
     }
-    
-    if let Some(path_pos) = url.find('/') {
-        let host_part = &url[..path_pos];
-        let path = &url[path_pos..];
-        
-        if let Some(port_pos) = host_part.find(':') {
-            let host = host_part[..port_pos].to_string();
-            let port: u16 = host_part[port_pos + 1..].parse().unwrap_or(80);
-            return (host, port, path.to_string());
-        } else {
-            return (host_part.to_string(), 80, path.to_string());
-        }
-    }
-    
-    if let Some(port_pos) = url.find(':') {
-        let host = url[..port_pos].to_string();
-        let port: u16 = url[port_pos + 1..].parse().unwrap_or(80);
-        return (host, port, "/".to_string());
-    }
-    
-    (url.to_string(), 80, "/".to_string())
 }
