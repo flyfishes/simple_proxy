@@ -561,6 +561,6 @@ fn parse_url(url: &str) -> (String, u16, String) {
         let default_port = if url_with_protocol.starts_with("https://") { 443 } else { 80 };
         (host_part.to_string(), default_port)
     };
-    
+    info!("解析目标url: {} {}:{} {}", url_with_protocol, host, port, path.to_string());
     (host, port, path.to_string())
 }
