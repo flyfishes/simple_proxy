@@ -23,20 +23,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: simple-proxy
+            artifact_name: simple_proxy
             asset_name: simple-proxy-linux-x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: simple-proxy.exe
+            artifact_name: simple_proxy.exe
             asset_name: simple-proxy-windows-x86_64.exe
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: simple-proxy
+            artifact_name: simple_proxy
             asset_name: simple-proxy-linux-aarch64
             use_cross: true
           - os: windows-latest
             target: x86_64-pc-windows-gnu
-            artifact_name: simple-proxy.exe
+            artifact_name: simple_proxy.exe
             asset_name: simple-proxy-windows-gnu-x86_64.exe
             use_cross: true
 
