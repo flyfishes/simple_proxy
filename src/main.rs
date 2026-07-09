@@ -523,44 +523,60 @@ fn handle_http_request(
 }
 
 // ==================== URL 解析（修复版 - 支持 https://） ====================
-// ==================== URL 解析 ====================
 
 fn parse_url(url: &str) -> (String, u16, String) {
-    let url = url.trim();
-    
-    // 如果没有协议前缀，添加 http://
-    let url_with_protocol = if url.starts_with("http://") || url.starts_with("https://") {
-        url.to_string()
+    let mut remaining = url;
+    let mut is_https = false;
+
+    // 1. 剥离并识别协议头
+    if remaining.starts_with("http://") {
+        remaining = &remaining[7..];
+    } else if remaining.starts_with("https://") {
+        remaining = &remaining[8..];
+        is_https = true;
+    }
+
+    // 2. 剥离并识别路径 (Path)
+    let (host_port_part, path_part) = if let Some(path_pos) = remaining.find('/') {
+        (&remaining[..path_pos], &remaining[path_pos..])
     } else {
-        format!("http://{}", url)
+        (remaining, "/")
     };
+
+    // 3. 处理纯相对路径的特殊情况 (例如直接输入了 "/index.html")
+    if host_port_part.is_empty() && path_part.starts_with('/') {
+        return ("localhost".to_string(), 80, path_part.to_string());
+    }
+
+    // 4. 剥离并识别 Host 与 Port
+    let mut host = host_port_part.to_string();
     
-    // 移除协议前缀
-    let rest = if url_with_protocol.starts_with("https://") {
-        &url_with_protocol[8..]
-    } else {
-        // http:// 或默认
-        &url_with_protocol[7..]
-    };
-    
-    // 分离主机和路径
-    let (host_part, path) = if let Some(pos) = rest.find('/') {
-        (&rest[..pos], &rest[pos..])
-    } else {
-        (rest, "/")
-    };
-    
-    // 分离主机和端口
-    let (host, port) = if let Some(pos) = host_part.find(':') {
-        let host = host_part[..pos].to_string();
-        let port_str = &host_part[pos + 1..];
-        let port = port_str.parse::<u16>().unwrap_or(80);
-        (host, port)
-    } else {
-        // 根据协议决定默认端口
-        let default_port = if url_with_protocol.starts_with("https://") { 443 } else { 80 };
-        (host_part.to_string(), default_port)
-    };
-    info!("解析目标url: {} {}:{} {}", url_with_protocol, host, port, path.to_string());
-    (host, port, path.to_string())
+    // 默认端口策略：根据协议决定默认端口
+    let mut port = if is_https { 443 } else { 80 };
+
+    // 检查 host_port_part 中是否包含端口号冒号
+    // 注意：如果是中括号包裹的 IPv6 地址 (如 [::1]:8080)，最右边的冒号才是端口分隔符
+    if let Some(colon_pos) = host_port_part.rfind(':') {
+        // 排除 IPv6 地址中没有端口的内部冒号情况 (例如 [::1])
+        if !host_port_part.ends_with(']') {
+            let port_str = &host_port_part[colon_pos + 1..];
+            if let Ok(p) = port_str.parse::<u16>() {
+                port = p;
+                host = host_port_part[..colon_pos].to_string();
+            }
+        }
+    }
+
+    // 去除 IPv6 地址的外层中括号 (如 [::1] -> ::1)
+    if host.starts_with('[') && host.ends_with(']') {
+        host = host[1..host.len() - 1].to_string();
+    }
+
+    // 如果 host 最终为空，兜底为 localhost
+    if host.is_empty() {
+        host = "localhost".to_string();
+    }
+
+    info!("解析目标url: {} {}:{} {}", url, host, port, path.to_string());
+    (host, port, path_part.to_string())
 }
