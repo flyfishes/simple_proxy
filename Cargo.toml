@@ -1,0 +1,100 @@
+[package]
+name = "simple_proxy"
+version = "0.1.0"
+edition = "2026"
+authors = ["flyfishes <flyfishes@github.com>"]
+description = "一个简单的HTTP/HTTPS代理服务器"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/flyfishes/simple-proxy"
+keywords = ["proxy", "http", "https", "server"]
+categories = ["network-programming", "web-programming"]
+
+[dependencies]
+# 基础依赖 - 无额外依赖，仅使用标准库
+
+# 如果需要更高级的功能，可以添加以下可选依赖：
+
+# 1. 日志支持
+# log = "0.4"
+# env_logger = "0.10"
+
+# 2. 配置文件支持 (TOML)
+# serde = { version = "1.0", features = ["derive"] }
+# toml = "0.8"
+
+# 3. 异步支持 (使用tokio)
+# tokio = { version = "1.0", features = ["full"] }
+
+# 4. 命令行参数解析
+# clap = { version = "4.0", features = ["derive"] }
+
+# 5. 更好的错误处理
+# anyhow = "1.0"
+# thiserror = "1.0"
+
+# 6. 性能优化
+# bytes = "1.0"
+# http = "1.0"
+
+[dev-dependencies]
+# 测试依赖
+# tempfile = "3.0"
+# reqwest = { version = "0.11", features = ["blocking"] }
+
+[profile.dev]
+opt-level = 0
+debug = true
+lto = false
+rpath = false
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = true
+panic = 'abort'
+codegen-units = 1
+strip = true
+
+[features]
+# 定义特性标志
+default = []
+# 启用日志功能
+logging = ["log", "env_logger"]
+# 启用配置文件支持
+config = ["serde", "toml"]
+# 启用异步支持
+async = ["tokio"]
+# 启用命令行参数解析
+cli = ["clap"]
+# 完整功能
+full = ["logging", "config", "cli"]
+
+# 示例: 启用所有功能
+# cargo build --features "full"
+
+# 示例: 只启用日志
+# cargo build --features "logging"
+
+[package.metadata.docs.rs]
+# 文档生成配置
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.deb]
+# Debian打包配置
+section = "net"
+priority = "optional"
+maintainer = "Your Name <your.email@example.com>"
+copyright = "2023, Your Name"
+license = "MIT"
+depends = "libc6"
+assets = [
+    ["target/release/simple_proxy", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/simple_proxy/", "644"],
+]
+
+[package.metadata.binary]
+# 二进制打包配置
+name = "simple_proxy"
+path = "src/main.rs"
