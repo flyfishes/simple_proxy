@@ -1,7 +1,7 @@
 [package]
 name = "simple_proxy"
 version = "0.1.0"
-edition = "2026"
+edition = "2021"
 authors = ["flyfishes <flyfishes@github.com>"]
 description = "一个简单的HTTP/HTTPS代理服务器"
 license = "MIT"
