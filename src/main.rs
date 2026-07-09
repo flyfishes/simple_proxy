@@ -62,7 +62,7 @@ async fn main() -> io::Result<()> {
 
                     match result {
                         Ok(_) => {
-                            info!("[连接 #{}] 客户端 {} 处理完成，耗时: {:?}", current_id, client_addr, duration);
+                            ;//info!("[连接 #{}] 客户端 {} 处理完成，耗时: {:?}", current_id, client_addr, duration);
                         }
                         Err(e) => {
                             error!("[连接 #{}] 客户端 {} 处理错误: {}, 耗时: {:?}", current_id, client_addr, e, duration);
@@ -82,12 +82,12 @@ fn init_logging() {
     #[cfg(feature = "logging")]
     {
         use env_logger::Builder;
-        let log_file = std::fs::File::create("proxy.log").expect("无法创建日志文件");
+        let log_file = std::fs::File::create("simple_proxy.log").expect("无法创建日志文件");
         Builder::new()
             .target(env_logger::Target::Pipe(Box::new(log_file)))
             .filter(None, log::LevelFilter::Info)
             .init();
-        info!("日志文件: proxy.log");
+        info!("日志文件: simple_proxy.log");
     }
 
     #[cfg(not(feature = "logging"))]
@@ -148,15 +148,15 @@ async fn handle_connection(
     let mut peek_buf = [0; 1];
     match stream.peek(&mut peek_buf).await {
         Ok(0) => {
-            warn!("[连接 #{}] 客户端 {} 连接已关闭", connection_id, client_addr);
+            //warn!("[连接 #{}] 客户端 {} 连接已关闭", connection_id, client_addr);
             Ok(())
         }
         Ok(_) => {
             if peek_buf[0] == 0x16 && tls_config.is_some() {
-                info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
+                //info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
                 return handle_tls_proxy(stream, connection_id, client_addr, tls_config.unwrap()).await;
             }
-            info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
+            //info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
             handle_http_proxy(stream, connection_id, client_addr).await
         }
         Err(e) => {
@@ -173,7 +173,7 @@ async fn handle_connection(
     client_addr: SocketAddr,
     _tls_config: Option<Arc<()>>,
 ) -> io::Result<()> {
-    info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
+    //info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
     handle_http_proxy(stream, connection_id, client_addr).await
 }
 
@@ -213,10 +213,10 @@ where
     let url = parts[1];
     let version = parts[2];
 
-    info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
+    //info!("[连接 #{}] {} {} {} {}", connection_id, client_addr, method, url, version);
 
     if method == "CONNECT" {
-        info!("[连接 #{}] 处理 HTTPS CONNECT 请求: {}", connection_id, url);
+        //info!("[连接 #{}] 处理 HTTPS CONNECT 请求: {}", connection_id, url);
         return handle_connect(stream, url, connection_id, client_addr).await;
     }
 
@@ -234,12 +234,12 @@ async fn handle_tls_proxy(
 ) -> io::Result<()> {
     use tokio_rustls::TlsAcceptor;
 
-    info!("[连接 #{}] 开始 TLS 握手", connection_id);
+    //info!("[连接 #{}] 开始 TLS 握手", connection_id);
     let acceptor = TlsAcceptor::from(config);
 
     match acceptor.accept(stream).await {
         Ok(tls_stream) => {
-            info!("[连接 #{}] TLS 握手成功", connection_id);
+            //info!("[连接 #{}] TLS 握手成功", connection_id);
             // 泛型支持：将握手后的 TLS Stream 传给 HTTP 处理器
             handle_http_proxy(tls_stream, connection_id, client_addr).await
         }
@@ -309,11 +309,11 @@ where
     let port: u16 = addr_parts[1].parse().unwrap_or(443);
     let target_addr = format!("{}:{}", host, port);
 
-    info!("[连接 #{}] 连接到目标服务器: {}", connection_id, target_addr);
+    //info!("[连接 #{}] 连接到目标服务器: {}", connection_id, target_addr);
 
     let target_stream = match TcpStream::connect(&target_addr).await {
         Ok(stream) => {
-            info!("[连接 #{}] 成功连接到目标服务器: {}", connection_id, target_addr);
+            //info!("[连接 #{}] 成功连接到目标服务器: {}", connection_id, target_addr); 
             stream
         }
         Err(e) => {
@@ -326,7 +326,7 @@ where
 
     let response = "HTTP/1.1 200 Connection Established\r\n\r\n";
     client_stream.write_all(response.as_bytes()).await?;
-    info!("[连接 #{}] 隧道已建立 ({} -> {})", connection_id, client_addr, target_addr);
+    //info!("[连接 #{}] 隧道已建立 ({} -> {})", connection_id, client_addr, target_addr);
 
     // 将双向流分离为读和写两部分，执行高速异步转发
     let (mut client_reader, mut client_writer) = io::split(client_stream);
@@ -349,7 +349,7 @@ where
     if let Err(e) = res1 { debug!("[连接 #{}] 客户端 -> 目标 转发结束: {}", connection_id, e); }
     if let Err(e) = res2 { debug!("[连接 #{}] 目标 -> 客户端 转发结束: {}", connection_id, e); }
 
-    info!("[连接 #{}] 隧道已关闭", connection_id);
+    //info!("[连接 #{}] 隧道已关闭", connection_id);
     Ok(())
 }
 
@@ -368,7 +368,7 @@ where
     S: io::AsyncRead + io::AsyncWrite + Unpin,
 {
     let (host, port, path) = parse_url(url);
-    info!("[连接 #{}] 解析目标: {}:{}{}", connection_id, host, port, path);
+    //info!("[连接 #{}] 解析目标: {}:{}{}", connection_id, host, port, path);
 
     let request_line = format!("{} {} {}\r\n", method, path, version);
     
@@ -382,7 +382,7 @@ where
     let target_addr = format!("{}:{}", host, port);
     let mut target_stream = match TcpStream::connect(&target_addr).await {
         Ok(stream) => {
-            info!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
+            //info!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
             stream
         }
         Err(e) => {
@@ -409,7 +409,7 @@ where
         }
     }
 
-    info!("[连接 #{}] 请求转发完成，等待响应...", connection_id);
+    //info!("[连接 #{}] 请求转发完成，等待响应...", connection_id);
 
     // 将响应从目标服务器抽干并写回客户端
     let (mut target_reader, mut target_writer) = io::split(target_stream);
@@ -420,7 +420,7 @@ where
     let _ = client_writer.shutdown().await;
     let _ = target_writer.shutdown().await;
 
-    info!("[连接 #{}] 响应转发完成 (共 {} 字节)", connection_id, bytes_copied);
+    //info!("[连接 #{}] 响应转发完成 (共 {} 字节)", connection_id, bytes_copied);
     Ok(())
 }
 
