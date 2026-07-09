@@ -545,6 +545,7 @@ fn parse_url(url: &str) -> (String, u16, String) {
 
     // 3. 处理纯相对路径的特殊情况 (例如直接输入了 "/index.html")
     if host_port_part.is_empty() && path_part.starts_with('/') {
+        warn!("解析目标url: {}. host_port_part is_empty, path_part: {}", url, path_part);
         return ("localhost".to_string(), 80, path_part.to_string());
     }
 
