@@ -2,7 +2,7 @@
 name = "simple_proxy"
 version = "0.1.0"
 edition = "2021"
-authors = ["flyfishes <flyfishes@github.com>"]
+authors = ["fly fishes <flyfishes@github.com>"]
 description = "一个简单的HTTP/HTTPS代理服务器"
 license = "MIT"
 readme = "README.md"
@@ -19,30 +19,19 @@ env_logger = { version = "0.11", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 toml = { version = "0.8", optional = true }
 
-# 3. TLS 支持（全部标记为 optional）
-# rustls = { version = "0.21", optional = true }
+# 3. TLS 支持
 rustls-pemfile = { version = "2.0", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 pki-types = { package = "rustls-pki-types", version = "1.0", optional = true }
 
-# 4. 异步支持 (使用tokio)
+# 4. 异步支持 (核心依赖，若服务器核心基于异步，建议不设为 optional)
 tokio = { version = "1.0", features = ["full"] }
 
 # 5. 命令行参数解析
 clap = { version = "4.0", features = ["derive"], optional = true }
 
-# 6. 更好的错误处理（可选）
-# anyhow = "1.0"
-# thiserror = "1.0"
-
-# 7. 性能优化（可选）
-# bytes = "1.0"
-# http = "1.0"
-
 [dev-dependencies]
-# 测试依赖
-# tempfile = "3.0"
-# reqwest = { version = "0.11", features = ["blocking"] }
+# 测试依赖（若需要可在此处解开注释）
 
 [profile.dev]
 opt-level = 0
@@ -59,8 +48,8 @@ codegen-units = 1
 strip = true
 
 [features]
-# 默认启用日志
-default = ["logging","tls"]
+# 默认启用日志与 TLS
+default = ["logging", "tls"]
 
 # 启用日志功能
 logging = ["log", "env_logger"]
@@ -68,31 +57,20 @@ logging = ["log", "env_logger"]
 # 启用配置文件支持
 config = ["serde", "toml"]
 
-# 启用异步支持
-async = ["tokio"]
-
 # 启用命令行参数解析
 cli = ["clap"]
 
-# 启用 TLS 支持（修复：所有依赖都标记为 optional）
+# 启用 TLS 支持（使用 dep: 显式激活可选依赖）
 tls = ["dep:tokio-rustls", "dep:rustls-pemfile", "dep:pki-types"]
 
-# 完整功能（包含 tls）
+# 完整功能（包含组件）
 full = ["logging", "config", "cli", "tls"]
 
-# 示例: 启用所有功能
-# cargo build --features "full"
-
-# 示例: 只启用日志
-# cargo build --features "logging"
-
 [package.metadata.docs.rs]
-# 文档生成配置
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.deb]
-# Debian打包配置
 section = "net"
 priority = "optional"
 maintainer = "Your Name <your.email@example.com>"
@@ -104,7 +82,7 @@ assets = [
     ["README.md", "usr/share/doc/simple_proxy/", "644"],
 ]
 
-[package.metadata.binary]
-# 二进制打包配置
+# 修正：标准的二进制定义配置块
+[[bin]]
 name = "simple_proxy"
 path = "src/main.rs"
