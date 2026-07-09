@@ -1,33 +1,35 @@
 use std::env;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, SocketAddr};
-use std::thread;
-use std::io;
-use std::time::Instant;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
-use log::{info, error, warn, debug};
+use log::{debug, error, info, warn};
 
 // 条件编译 TLS 支持
 #[cfg(feature = "tls")]
-use rustls::{ServerConfig, Certificate, PrivateKey};
+use pki_types::{CertificateDer, PrivateKeyDer};
 #[cfg(feature = "tls")]
 use rustls_pemfile::{certs, pkcs8_private_keys};
 #[cfg(feature = "tls")]
 use std::fs::File;
 #[cfg(feature = "tls")]
 use std::io::BufReader;
+#[cfg(feature = "tls")]
+use tokio_rustls::rustls::ServerConfig;
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     // 初始化日志
     init_logging();
 
     // 解析命令行参数
     let (ip, port) = parse_args();
     let bind_addr = format!("{}:{}", ip, port);
-    
-    let listener = TcpListener::bind(&bind_addr)?;
-    
+
+    let listener = TcpListener::bind(&bind_addr).await?;
+
     info!("代理服务器运行在 {}", bind_addr);
     info!("同时支持 HTTP 和 HTTPS 代理协议");
     info!("使用方法:");
@@ -38,44 +40,41 @@ fn main() -> io::Result<()> {
     // 加载 TLS 配置（如果启用）
     #[cfg(feature = "tls")]
     let tls_config = load_tls_config().ok();
-    
+
     #[cfg(not(feature = "tls"))]
-    let tls_config: Option<Arc<ServerConfig>> = None;
+    let tls_config: Option<Arc<()>> = None;
 
     let mut connection_id = 0;
-    for stream in listener.incoming() {
-        connection_id += 1;
-        let current_id = connection_id;
-        let tls_config_clone = tls_config.clone();
-        
-        match stream {
-            Ok(stream) => {
-                let client_addr = stream.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
+    loop {
+        match listener.accept().await {
+            Ok((stream, client_addr)) => {
+                connection_id += 1;
+                let current_id = connection_id;
+                let tls_config_clone = tls_config.clone();
+
                 info!("[连接 #{}] 新客户端连接: {}", current_id, client_addr);
-                
-                thread::spawn(move || {
+
+                // 异步派生任务处理连接
+                tokio::spawn(async move {
                     let start_time = Instant::now();
-                    let result = handle_connection(stream, current_id, client_addr, tls_config_clone);
+                    let result = handle_connection(stream, current_id, client_addr, tls_config_clone).await;
                     let duration = start_time.elapsed();
-                    
+
                     match result {
                         Ok(_) => {
-                            info!("[连接 #{}] 客户端 {} 处理完成，耗时: {:?}", 
-                                  current_id, client_addr, duration);
+                            info!("[连接 #{}] 客户端 {} 处理完成，耗时: {:?}", current_id, client_addr, duration);
                         }
                         Err(e) => {
-                            error!("[连接 #{}] 客户端 {} 处理错误: {}, 耗时: {:?}", 
-                                   current_id, client_addr, e, duration);
+                            error!("[连接 #{}] 客户端 {} 处理错误: {}, 耗时: {:?}", current_id, client_addr, e, duration);
                         }
                     }
                 });
             }
             Err(e) => {
-                error!("[连接 #{}] 接受连接失败: {}", current_id, e);
+                error!("接受连接失败: {}", e);
             }
         }
     }
-    Ok(())
 }
 
 // 初始化日志系统
@@ -90,7 +89,7 @@ fn init_logging() {
             .init();
         info!("日志文件: proxy.log");
     }
-    
+
     #[cfg(not(feature = "logging"))]
     {
         println!("日志功能未启用，请使用 --features logging 编译");
@@ -102,7 +101,7 @@ fn parse_args() -> (String, u16) {
     let args: Vec<String> = env::args().collect();
     let mut ip = "127.0.0.1".to_string();
     let mut port = 8080;
-    
+
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -129,40 +128,36 @@ fn parse_args() -> (String, u16) {
             }
         }
     }
-    
+
     if ip.parse::<std::net::IpAddr>().is_err() {
         eprintln!("警告: 无效的 IP 地址 {}，使用 127.0.0.1", ip);
         ip = "127.0.0.1".to_string();
     }
-    
-    info!("监听地址: {}:{}", ip, port);
+
     (ip, port)
 }
 
 // 处理连接 - 协议检测
-fn handle_connection(
+#[cfg(feature = "tls")]
+async fn handle_connection(
     stream: TcpStream,
     connection_id: usize,
     client_addr: SocketAddr,
     tls_config: Option<Arc<ServerConfig>>,
 ) -> io::Result<()> {
     let mut peek_buf = [0; 1];
-    // 修复: 使用 &stream 而不是 mut stream
-    match stream.peek(&mut peek_buf) {
+    match stream.peek(&mut peek_buf).await {
         Ok(0) => {
             warn!("[连接 #{}] 客户端 {} 连接已关闭", connection_id, client_addr);
-            return Ok(());
+            Ok(())
         }
         Ok(_) => {
-            #[cfg(feature = "tls")]
-            {
-                if peek_buf[0] == 0x16 && tls_config.is_some() {
-                    info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
-                    return handle_tls_proxy(stream, connection_id, client_addr, tls_config.unwrap());
-                }
+            if peek_buf[0] == 0x16 && tls_config.is_some() {
+                info!("[连接 #{}] 检测到 TLS 连接 (HTTPS 代理)", connection_id);
+                return handle_tls_proxy(stream, connection_id, client_addr, tls_config.unwrap()).await;
             }
             info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
-            handle_http_proxy(stream, connection_id, client_addr)
+            handle_http_proxy(stream, connection_id, client_addr).await
         }
         Err(e) => {
             error!("[连接 #{}] 无法检测协议: {}", connection_id, e);
@@ -171,25 +166,44 @@ fn handle_connection(
     }
 }
 
-// ==================== HTTP 代理处理（明文） ====================
-
-fn handle_http_proxy(
-    mut stream: TcpStream,
+#[cfg(not(feature = "tls"))]
+async fn handle_connection(
+    stream: TcpStream,
     connection_id: usize,
     client_addr: SocketAddr,
+    _tls_config: Option<Arc<()>>,
 ) -> io::Result<()> {
+    info!("[连接 #{}] 检测到明文连接 (HTTP 代理)", connection_id);
+    handle_http_proxy(stream, connection_id, client_addr).await
+}
+
+// ==================== HTTP 代理处理（明文） ====================
+
+async fn handle_http_proxy<S>(
+    mut stream: S,
+    connection_id: usize,
+    client_addr: SocketAddr,
+) -> io::Result<()>
+where
+    S: io::AsyncRead + io::AsyncWrite + Unpin,
+{
     let mut buffer = [0; 8192];
-    let bytes_read = stream.read(&mut buffer)?;
-    
+    let bytes_read = stream.read(&mut buffer).await?;
+
     if bytes_read == 0 {
         return Ok(());
     }
 
-    let request = String::from_utf8_lossy(&buffer[..bytes_read]);
-    
-    let first_line = request.lines().next().unwrap_or("");
+    // 安全解析：先找 \r\n\r\n 规避二进制 Body 导致的 UTF-8 索引 Panic 风险
+    let header_end = buffer[..bytes_read]
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(bytes_read);
+
+    let request_str = String::from_utf8_lossy(&buffer[..header_end]);
+    let first_line = request_str.lines().next().unwrap_or("");
     let parts: Vec<&str> = first_line.split_whitespace().collect();
-    
+
     if parts.len() < 3 {
         warn!("[连接 #{}] 请求格式错误: {}", connection_id, first_line);
         return Ok(());
@@ -203,63 +217,37 @@ fn handle_http_proxy(
 
     if method == "CONNECT" {
         info!("[连接 #{}] 处理 HTTPS CONNECT 请求: {}", connection_id, url);
-        return handle_connect(stream, url, connection_id, client_addr);
+        return handle_connect(stream, url, connection_id, client_addr).await;
     }
 
-    handle_http_request(stream, method, url, version, &buffer[..bytes_read], connection_id, client_addr)
+    handle_http_request(stream, method, url, version, &buffer[..bytes_read], header_end, connection_id).await
 }
 
 // ==================== TLS 代理处理（HTTPS 代理） ====================
 
 #[cfg(feature = "tls")]
-fn handle_tls_proxy(
+async fn handle_tls_proxy(
     stream: TcpStream,
     connection_id: usize,
     client_addr: SocketAddr,
     config: Arc<ServerConfig>,
 ) -> io::Result<()> {
-    use tokio::runtime::Runtime;
     use tokio_rustls::TlsAcceptor;
-    
-    info!("[连接 #{}] 开始 TLS 握手", connection_id);
-    
-    let rt = Runtime::new().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    
-    rt.block_on(async {
-        let acceptor = TlsAcceptor::from(config);
-        let stream = tokio::net::TcpStream::from_std(stream)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        
-        let tls_stream = match acceptor.accept(stream).await {
-            Ok(s) => {
-                info!("[连接 #{}] TLS 握手成功", connection_id);
-                s
-            }
-            Err(e) => {
-                error!("[连接 #{}] TLS 握手失败: {}", connection_id, e);
-                return Err(io::Error::new(io::ErrorKind::Other, e));
-            }
-        };
-        
-        // 修复1: 使用 into_inner() 获取内部连接
-        let (io_stream, _connection) = tls_stream.into_inner();
-        // 修复2: 使用 into_std() 转换 tokio TcpStream 到 std TcpStream
-        let std_stream = io_stream.into_std().await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        
-        handle_http_proxy(std_stream, connection_id, client_addr)
-    })
-}
 
-#[cfg(not(feature = "tls"))]
-fn handle_tls_proxy(
-    _stream: TcpStream,
-    connection_id: usize,
-    _client_addr: SocketAddr,
-    _config: Arc<ServerConfig>,
-) -> io::Result<()> {
-    error!("[连接 #{}] TLS 支持未编译，请启用 'tls' feature", connection_id);
-    Err(io::Error::new(io::ErrorKind::Unsupported, "TLS not enabled"))
+    info!("[连接 #{}] 开始 TLS 握手", connection_id);
+    let acceptor = TlsAcceptor::from(config);
+
+    match acceptor.accept(stream).await {
+        Ok(tls_stream) => {
+            info!("[连接 #{}] TLS 握手成功", connection_id);
+            // 泛型支持：将握手后的 TLS Stream 传给 HTTP 处理器
+            handle_http_proxy(tls_stream, connection_id, client_addr).await
+        }
+        Err(e) => {
+            error!("[连接 #{}] TLS 握手失败: {}", connection_id, e);
+            Err(e)
+        }
+    }
 }
 
 // ==================== TLS 配置加载 ====================
@@ -268,51 +256,49 @@ fn handle_tls_proxy(
 fn load_tls_config() -> Result<Arc<ServerConfig>, Box<dyn std::error::Error>> {
     let cert_path = env::var("PROXY_CERT").unwrap_or_else(|_| "cert.pem".to_string());
     let key_path = env::var("PROXY_KEY").unwrap_or_else(|_| "key.pem".to_string());
-    
+
     info!("加载证书: {}, 私钥: {}", cert_path, key_path);
-    
+
     let certs = load_certs(&cert_path)?;
     let key = load_private_key(&key_path)?;
-    
+
     let config = ServerConfig::builder()
-        .with_safe_defaults()
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
-    
+
     Ok(Arc::new(config))
 }
 
 #[cfg(feature = "tls")]
-fn load_certs(path: &str) -> Result<Vec<Certificate>, Box<dyn std::error::Error>> {
+fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Box<dyn std::error::Error>> {
     let certfile = File::open(path)?;
     let mut reader = BufReader::new(certfile);
-    // 修复3: certs() 返回 Iterator，需要 collect 到 Vec
-    let cert_reader: Vec<_> = certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(cert_reader.into_iter().map(Certificate).collect())
+    let cert_reader: Vec<_> = certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
+    Ok(cert_reader)
 }
 
 #[cfg(feature = "tls")]
-fn load_private_key(path: &str) -> Result<PrivateKey, Box<dyn std::error::Error>> {
+fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>, Box<dyn std::error::Error>> {
     let keyfile = File::open(path)?;
     let mut reader = BufReader::new(keyfile);
-    // 修复4: pkcs8_private_keys() 返回 Iterator，需要 collect 到 Vec
-    let mut keys: Vec<_> = pkcs8_private_keys(&mut reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut keys: Vec<_> = pkcs8_private_keys(&mut reader).collect::<Result<Vec<_>, _>>()?;
     if keys.is_empty() {
         return Err("没有找到私钥".into());
     }
-    Ok(PrivateKey(keys.remove(0)))
+    Ok(PrivateKeyDer::Pkcs8(keys.remove(0)))
 }
 
 // ==================== CONNECT 方法处理（HTTPS 隧道） ====================
 
-fn handle_connect(
-    mut client_stream: TcpStream,
+async fn handle_connect<S>(
+    mut client_stream: S,
     url: &str,
     connection_id: usize,
     client_addr: SocketAddr,
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    S: io::AsyncRead + io::AsyncWrite + Unpin,
+{
     let addr_parts: Vec<&str> = url.split(':').collect();
     if addr_parts.len() != 2 {
         error!("[连接 #{}] 无效的 CONNECT 地址: {}", connection_id, url);
@@ -325,7 +311,7 @@ fn handle_connect(
 
     info!("[连接 #{}] 连接到目标服务器: {}", connection_id, target_addr);
 
-    let mut target_stream = match TcpStream::connect(&target_addr) {
+    let target_stream = match TcpStream::connect(&target_addr).await {
         Ok(stream) => {
             info!("[连接 #{}] 成功连接到目标服务器: {}", connection_id, target_addr);
             stream
@@ -333,66 +319,35 @@ fn handle_connect(
         Err(e) => {
             error!("[连接 #{}] 连接目标服务器失败 {}: {}", connection_id, target_addr, e);
             let response = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
-            client_stream.write(response.as_bytes())?;
+            client_stream.write_all(response.as_bytes()).await?;
             return Ok(());
         }
     };
 
     let response = "HTTP/1.1 200 Connection Established\r\n\r\n";
-    client_stream.write(response.as_bytes())?;
+    client_stream.write_all(response.as_bytes()).await?;
     info!("[连接 #{}] 隧道已建立 ({} -> {})", connection_id, client_addr, target_addr);
 
-    let mut client_clone = client_stream.try_clone()?;
-    let mut target_clone = target_stream.try_clone()?;
-    
-    let handle1 = thread::spawn(move || -> io::Result<()> {
-        let mut buffer = [0; 8192];
-        let mut total_bytes = 0;
-        loop {
-            match client_clone.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) => {
-                    total_bytes += n;
-                    if let Err(e) = target_clone.write_all(&buffer[..n]) {
-                        debug!("[连接 #{}] 向目标写入数据失败: {}", connection_id, e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    debug!("[连接 #{}] 从客户端读取数据失败: {}", connection_id, e);
-                    break;
-                }
-            }
-        }
-        info!("[连接 #{}] 客户端 -> 目标 总流量: {} 字节", connection_id, total_bytes);
-        Ok(())
-    });
+    // 将双向流分离为读和写两部分，执行高速异步转发
+    let (mut client_reader, mut client_writer) = io::split(client_stream);
+    let (mut target_reader, mut target_writer) = io::split(target_stream);
 
-    let handle2 = thread::spawn(move || -> io::Result<()> {
-        let mut buffer = [0; 8192];
-        let mut total_bytes = 0;
-        loop {
-            match target_stream.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) => {
-                    total_bytes += n;
-                    if let Err(e) = client_stream.write_all(&buffer[..n]) {
-                        debug!("[连接 #{}] 向客户端写入数据失败: {}", connection_id, e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    debug!("[连接 #{}] 从目标读取数据失败: {}", connection_id, e);
-                    break;
-                }
-            }
-        }
-        info!("[连接 #{}] 目标 -> 客户端 总流量: {} 字节", connection_id, total_bytes);
-        Ok(())
-    });
+    let client_to_target = async {
+        let res = io::copy(&mut client_reader, &mut target_writer).await;
+        let _ = target_writer.shutdown().await;
+        res
+    };
 
-    let _ = handle1.join();
-    let _ = handle2.join();
+    let target_to_client = async {
+        let res = io::copy(&mut target_reader, &mut client_writer).await;
+        let _ = client_writer.shutdown().await;
+        res
+    };
+
+    // 并发流双向拷贝
+    let (res1, res2) = tokio::join!(client_to_target, target_to_client);
+    if let Err(e) = res1 { debug!("[连接 #{}] 客户端 -> 目标 转发结束: {}", connection_id, e); }
+    if let Err(e) = res2 { debug!("[连接 #{}] 目标 -> 客户端 转发结束: {}", connection_id, e); }
 
     info!("[连接 #{}] 隧道已关闭", connection_id);
     Ok(())
@@ -400,30 +355,32 @@ fn handle_connect(
 
 // ==================== 标准 HTTP 请求处理 ====================
 
-fn handle_http_request(
-    mut client_stream: TcpStream,
+async fn handle_http_request<S>(
+    mut client_stream: S,
     method: &str,
     url: &str,
     version: &str,
     request_data: &[u8],
+    header_end: usize,
     connection_id: usize,
-    _client_addr: SocketAddr,  // 修复: 添加下划线前缀表示未使用
-) -> io::Result<()> {
+) -> io::Result<()>
+where
+    S: io::AsyncRead + io::AsyncWrite + Unpin,
+{
     let (host, port, path) = parse_url(url);
     info!("[连接 #{}] 解析目标: {}:{}{}", connection_id, host, port, path);
 
     let request_line = format!("{} {} {}\r\n", method, path, version);
     
-    let request_str = String::from_utf8_lossy(request_data);
-    let headers: Vec<&str> = request_str
+    let header_str = String::from_utf8_lossy(&request_data[..header_end]);
+    let headers: Vec<&str> = header_str
         .lines()
         .skip(1)
-        .take_while(|line| !line.is_empty())
         .filter(|line| !line.to_lowercase().starts_with("proxy-"))
         .collect();
 
     let target_addr = format!("{}:{}", host, port);
-    let mut target_stream = match TcpStream::connect(&target_addr) {
+    let mut target_stream = match TcpStream::connect(&target_addr).await {
         Ok(stream) => {
             info!("[连接 #{}] 成功连接到 {}:{}", connection_id, host, port);
             stream
@@ -431,58 +388,39 @@ fn handle_http_request(
         Err(e) => {
             error!("[连接 #{}] 连接目标 {} 失败: {}", connection_id, target_addr, e);
             let response = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
-            client_stream.write(response.as_bytes())?;
+            client_stream.write_all(response.as_bytes()).await?;
             return Ok(());
         }
     };
 
-    target_stream.write(request_line.as_bytes())?;
+    // 写入请求头
+    target_stream.write_all(request_line.as_bytes()).await?;
     for header in &headers {
-        target_stream.write(header.as_bytes())?;
-        target_stream.write(b"\r\n")?;
+        target_stream.write_all(header.as_bytes()).await?;
+        target_stream.write_all(b"\r\n").await?;
     }
-    target_stream.write(b"\r\n")?;
+    target_stream.write_all(b"\r\n").await?;
 
-    if let Some(body_start) = request_str.find("\r\n\r\n") {
-        let body = &request_data[body_start + 4..];
+    // 写入请求体（如果存在）
+    if header_end + 4 < request_data.len() {
+        let body = &request_data[header_end + 4..];
         if !body.is_empty() {
-            debug!("[连接 #{}] 转发请求体: {} 字节", connection_id, body.len());
-            target_stream.write(body)?;
+            target_stream.write_all(body).await?;
         }
     }
 
-    info!("[连接 #{}] 请求转发完成 (Headers: {})", connection_id, headers.len());
+    info!("[连接 #{}] 请求转发完成，等待响应...", connection_id);
 
-    // 修复5: 使用两个独立的 buffer 来避免借用冲突
-    let mut buffer = [0; 8192];
-    let mut total_bytes = 0;
-    let mut response_status = "unknown".to_string();
-    
-    loop {
-        match target_stream.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => {
-                if total_bytes == 0 {
-                    // 修复6: 使用单独的变量来存储响应状态，避免借用冲突
-                    if let Ok(response_str) = std::str::from_utf8(&buffer[..n]) {
-                        if let Some(status_line) = response_str.lines().next() {
-                            response_status = status_line.to_string();
-                            info!("[连接 #{}] 响应状态: {}", connection_id, status_line);
-                        }
-                    }
-                }
-                total_bytes += n;
-                client_stream.write_all(&buffer[..n])?;
-            }
-            Err(e) => {
-                error!("[连接 #{}] 从目标读取响应错误: {}", connection_id, e);
-                break;
-            }
-        }
-    }
+    // 将响应从目标服务器抽干并写回客户端
+    let (mut target_reader, mut target_writer) = io::split(target_stream);
+    let (mut client_reader, mut client_writer) = io::split(client_stream);
 
-    info!("[连接 #{}] 响应转发完成 ({} 字节, {})", 
-          connection_id, total_bytes, response_status);
+    // 转发响应数据
+    let bytes_copied = io::copy(&mut target_reader, &mut client_writer).await?;
+    let _ = client_writer.shutdown().await;
+    let _ = target_writer.shutdown().await;
+
+    info!("[连接 #{}] 响应转发完成 (共 {} 字节)", connection_id, bytes_copied);
     Ok(())
 }
 
