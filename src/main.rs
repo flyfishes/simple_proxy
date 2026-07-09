@@ -24,6 +24,8 @@ fn main() -> io::Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let client_addr = stream.peer_addr().unwrap_or_else(|_| "unknown".parse().unwrap());
+                info!("Client Connect: {}", client_addr);
                 thread::spawn(|| {
                     if let Err(e) = handle_client(stream) {
                         info!("处理客户端错误: {}", e);
