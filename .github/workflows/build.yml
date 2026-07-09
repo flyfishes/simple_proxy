@@ -1,4 +1,4 @@
-name: Build and Release Proxy
+name: Build and Release Simple Proxy
 
 on:
   push:
