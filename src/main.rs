@@ -3,27 +3,35 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::io;
+use env_logger::Builder;
+use log::{info, LevelFilter};
+use std::fs::File;
 
 fn main() -> io::Result<()> {
     // 获取端口配置
     let port = get_port();
     let bind_addr = format!("127.0.0.1:{}", port);
+    let log_file = File::create("simple_proxy.log").expect("无法创建日志文件");
+    Builder::new()
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .filter(None, LevelFilter::Info)  // 设置日志级别
+        .init();
     
     let listener = TcpListener::bind(&bind_addr)?;
-    println!("代理服务器运行在 {}", bind_addr);
-    println!("按 Ctrl+C 停止服务器");
+    info!("代理服务器运行在 {}", bind_addr);
+    info!("按 Ctrl+C 停止服务器");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 thread::spawn(|| {
                     if let Err(e) = handle_client(stream) {
-                        eprintln!("处理客户端错误: {}", e);
+                        info!("处理客户端错误: {}", e);
                     }
                 });
             }
             Err(e) => {
-                eprintln!("连接失败: {}", e);
+                info!("连接失败: {}", e);
             }
         }
     }
@@ -36,7 +44,7 @@ fn get_port() -> u16 {
     if args.len() >= 2 {
         if let Ok(port) = args[1].parse::<u16>() {
             if port > 0 && port <= 65535 {
-                println!("使用命令行参数端口: {}", port);
+                info!("使用命令行参数端口: {}", port);
                 return port;
             }
         }
@@ -46,14 +54,14 @@ fn get_port() -> u16 {
     if let Ok(port_str) = env::var("PROXY_PORT") {
         if let Ok(port) = port_str.parse::<u16>() {
             if port > 0 && port <= 65535 {
-                println!("使用环境变量 PROXY_PORT={} 端口", port);
+                info!("使用环境变量 PROXY_PORT={} 端口", port);
                 return port;
             }
         }
     }
 
     // 默认端口
-    println!("使用默认端口: 8080");
+    info!("使用默认端口: 8080");
     8080
 }
 
