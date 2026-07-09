@@ -74,12 +74,23 @@ jobs:
 
     - name: Build (release)
       run: cargo build --release --target ${{ matrix.target }}
-
+    
+    - name: List build artifacts for debugging
+      run: |
+        echo "Contents of target directory:"
+        ls -la target/
+        echo "Contents of target/release directory:"
+        ls -la target/release/ || echo "Directory not found"
+        echo "Contents of target/x86_64-unknown-linux-gnu/release directory:"
+        ls -la target/x86_64-unknown-linux-gnu/release/ || echo "Directory not found"
+        
     - name: Upload release artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.asset_name }}
         path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+        # 或者使用通配符
+        # path: target/${{ matrix.target }}/release/simple-proxy*
         if-no-files-found: error
 
     - name: Upload debug artifact (optional)
