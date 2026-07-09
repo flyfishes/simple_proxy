@@ -26,9 +26,11 @@ toml = { version = "0.8", optional = true }
 # 添加 TLS 支持
 rustls = "0.21"
 tokio-rustls = "0.24"
+rustls-pemfile = { version = "2.0"}
 
 # 3. 异步支持 (使用tokio)
 tokio = { version = "1.0", features = ["full"], optional = true }
+tokio-rustls = { version = "0.24" }
 
 # 4. 命令行参数解析
 clap = { version = "4.0", features = ["derive"], optional = true }
@@ -71,6 +73,7 @@ config = ["serde", "toml"]
 async = ["tokio"]
 # 启用命令行参数解析
 cli = ["clap"]
+tls = ["rustls", "rustls-pemfile", "tokio", "tokio-rustls"]
 # 完整功能
 full = ["logging", "config", "cli"]
 
