@@ -11,10 +11,6 @@ keywords = ["proxy", "http", "https", "server"]
 categories = ["network-programming", "web-programming"]
 
 [dependencies]
-# 基础依赖 - 无额外依赖，仅使用标准库
-
-# 如果需要更高级的功能，可以添加以下可选依赖：
-
 # 1. 日志支持
 log = { version = "0.4", optional = true }
 env_logger = { version = "0.10", optional = true }
@@ -23,22 +19,22 @@ env_logger = { version = "0.10", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 toml = { version = "0.8", optional = true }
 
-# 添加 TLS 支持
-rustls = "0.21"
-tokio-rustls = "0.24"
-rustls-pemfile = { version = "2.0"}
+# 3. TLS 支持（全部标记为 optional）
+rustls = { version = "0.21", optional = true }
+rustls-pemfile = { version = "2.0", optional = true }
+tokio-rustls = { version = "0.24", optional = true }
 
-# 3. 异步支持 (使用tokio)
+# 4. 异步支持 (使用tokio)
 tokio = { version = "1.0", features = ["full"], optional = true }
 
-# 4. 命令行参数解析
+# 5. 命令行参数解析
 clap = { version = "4.0", features = ["derive"], optional = true }
 
-# 5. 更好的错误处理
+# 6. 更好的错误处理（可选）
 # anyhow = "1.0"
 # thiserror = "1.0"
 
-# 6. 性能优化
+# 7. 性能优化（可选）
 # bytes = "1.0"
 # http = "1.0"
 
@@ -62,19 +58,26 @@ codegen-units = 1
 strip = true
 
 [features]
-# 定义特性标志
-default = ["logging"]
+# 默认启用日志
+default = ["logging","tls"]
+
 # 启用日志功能
 logging = ["log", "env_logger"]
+
 # 启用配置文件支持
 config = ["serde", "toml"]
+
 # 启用异步支持
 async = ["tokio"]
+
 # 启用命令行参数解析
 cli = ["clap"]
-tls = ["rustls", "rustls-pemfile", "tokio", "tokio-rustls"]
-# 完整功能
-full = ["logging", "config", "cli"]
+
+# 启用 TLS 支持（修复：所有依赖都标记为 optional）
+tls = ["rustls", "rustls-pemfile", "tokio-rustls", "tokio"]
+
+# 完整功能（包含 tls）
+full = ["logging", "config", "cli", "tls"]
 
 # 示例: 启用所有功能
 # cargo build --features "full"
