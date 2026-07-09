@@ -431,6 +431,7 @@ fn load_tls_config() -> Result<Arc<TlsAcceptor>, Box<dyn std::error::Error>> {
 }
 
 // ==================== CONNECT 方法处理（HTTPS 隧道） ====================
+// ==================== CONNECT 方法处理（精确半关闭解耦版） ====================
 
 fn handle_connect(
     mut client_stream: TcpStream,
@@ -447,15 +448,14 @@ fn handle_connect(
     }
 
     let host = addr_parts[0];
-    // 修复点 1: 安全解析端口，防止非法格式输入导致 unwrap() Panic
     let port: u16 = addr_parts[1].parse().unwrap_or(443); 
     let target_addr = format!("{}:{}", host, port);
 
-    info!("[连接 #{}] 连接到目标服务器: {}", connection_id, target_addr);
+    debug!("[连接 #{}] 正在尝试建立 TCP 远端连接: {}", connection_id, target_addr);
 
     let mut target_stream = match TcpStream::connect(&target_addr) {
         Ok(stream) => {
-            debug!("[连接 #{}] 成功连接到目标服务器: {}", connection_id, target_addr);
+            debug!("[连接 #{}] 成功连接到目标远端服务器: {}", connection_id, target_addr);
             stream
         }
         Err(e) => {
@@ -466,48 +466,59 @@ fn handle_connect(
         }
     };
 
+    // 告诉客户端，代理隧道已经打通，可以开始传输加密的 TLS 数据流了
     client_stream.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
-    debug!("[连接 #{}] 隧道已建立 ({} -> {})", connection_id, client_addr, target_addr);
+    client_stream.flush()?;
+    debug!("[连接 #{}] 200 响应已回传，隧道正式建立 ({} <-> {})", connection_id, client_addr, target_addr);
 
-    // 深度修复点 2: 解决双向转发下的线程死锁与半关闭泄露问题
-    let mut client_clone = client_stream.try_clone()?;
-    let mut target_clone = target_stream.try_clone()?;
+    // 克隆 Socket 句柄用于双工多线程
+    let mut client_read = client_stream.try_clone()?;
+    let mut target_write = target_stream.try_clone()?;
     
-    // 克隆一个引用专用于在一个线程退出后跨线程激活另一个阻塞的 Socket
-    let client_shutdown_trigger = client_stream.try_clone()?;
+    let mut target_read = target_stream.try_clone()?;
+    let mut client_write = client_stream.try_clone()?;
 
-    let handle1 = thread::spawn(move || -> io::Result<()> {
+    // 【方向 A】：客户端 -> 目标服务器
+    let handle_upstream = thread::spawn(move || -> io::Result<()> {
         let mut buffer = [0; 8192];
         loop {
-            match client_clone.read(&mut buffer) {
-                Ok(0) => break,
+            match client_read.read(&mut buffer) {
+                Ok(0) => break, // 客户端停止发送数据
                 Ok(n) => {
-                    if target_clone.write_all(&buffer[..n]).is_err() { break; }
+                    if target_write.write_all(&buffer[..n]).is_err() { break; }
+                    let _ = target_write.flush();
                 }
                 Err(_) => break,
             }
         }
-        // 客户端读断开时，立即通知对端触发另一侧 read 退出，防止死锁
-        let _ = client_shutdown_trigger.shutdown(std::net::Shutdown::Both);
+        // ⭐ 精确半关闭：仅仅告诉远端服务器“客户端不会再写数据了”
+        let _ = target_write.shutdown(std::net::Shutdown::Write);
         Ok(())
     });
 
-    let mut buffer = [0; 8192];
-    loop {
-        match target_stream.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => {
-                if client_stream.write_all(&buffer[..n]).is_err() { break; }
+    // 【方向 B】：目标服务器 -> 客户端
+    let handle_downstream = thread::spawn(move || -> io::Result<()> {
+        let mut buffer = [0; 8192];
+        loop {
+            match target_read.read(&mut buffer) {
+                Ok(0) => break, // 远端服务器响应结束
+                Ok(n) => {
+                    if client_write.write_all(&buffer[..n]).is_err() { break; }
+                    let _ = client_write.flush();
+                }
+                Err(_) => break,
             }
-            Err(_) => break,
         }
-    }
+        // ⭐ 精确半关闭：仅仅告诉客户端“远端响应已经全部发完”，给 Schannel 留出发送 close_notify 的时间
+        let _ = client_write.shutdown(std::net::Shutdown::Write);
+        Ok(())
+    });
 
-    // 彻底释放并回收双向的系统底层 Socket 描述符资源
-    let _ = client_stream.shutdown(std::net::Shutdown::Both);
-    let _ = handle1.join();
+    // 等待双向传输线程平稳安全结束
+    let _ = handle_upstream.join();
+    let _ = handle_downstream.join();
 
-    debug!("[连接 #{}] 隧道已关闭", connection_id);
+    debug!("[连接 #{}] 隧道双向数据流传输安全结束，关闭连接", connection_id);
     Ok(())
 }
 
